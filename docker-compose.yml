@@ -1,0 +1,43 @@
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    ports:
+      - "${CHROMADB_PORT}:${CHROMADB_PORT}"
+    environment:
+      - CHROMA_HOST=0.0.0.0
+      - CHROMA_PORT=${CHROMADB_PORT}
+      - CHROMA_DB_IMPL=duckdb+parquet
+      - CHROMA_PERSIST_DIRECTORY=/chroma/chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+    # networks:
+    #   - rag-network
+  # server:
+  #   image: rag-server:latest
+  #   container_name: server
+  #   env_file:
+  #     - .env
+  #   depends_on:
+  #     - chromadb
+  #   ports:
+  #     - "${SERVER_PORT}:${SERVER_PORT}"
+  #   volumes:
+  #     - ./logs/server:/home/logs
+  #     - ./data:/home/data
+  #   networks:
+  #     - rag-network
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+volumes:
+  chroma_data:
+    driver: local
+networks:
+  rag-network:
+    driver: bridge
