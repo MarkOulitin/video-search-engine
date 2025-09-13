@@ -41,7 +41,7 @@ class VideoProcessor:
                     '-t', str(duration),
                     '-c:v', 'libx264',
                     '-c:a', 'copy',
-                    '-avoid_negative_ts', 'make_zero',
+                    # '-avoid_negative_ts', 'make_zero',
                     '-y',  # Overwrite output file
                     temp_path
                 ]

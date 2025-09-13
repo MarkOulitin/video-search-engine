@@ -2,21 +2,23 @@ import os
 import json
 import time
 import chromadb
-import torch
+import base64
+import uuid
 from typing import Dict, List
-from sentence_transformers import SentenceTransformer
 from logger import logger
 from dotenv import load_dotenv
 load_dotenv()
 
 from video_processor import VideoProcessor
+from video_pipeline import VideoPipelineProcessor
 
 class Server:
     def __init__(self):
         self.chromadb_host = os.getenv('CHROMADB_HOST', 'localhost')
         self.chromadb_port = int(os.getenv('CHROMADB_PORT', 8000))
-        self.top_k = int(os.getenv('RETRIEVAL_TOP_K', 5))
+        self.top_k = int(os.getenv('RETRIEVAL_TOP_K', 1))
         self.video_processor = VideoProcessor()
+        self.pipeline_processor = VideoPipelineProcessor()
 
         logger.info(f"Connecting to ChromaDB at {self.chromadb_host}:{self.chromadb_port}")
         self.client = chromadb.HttpClient(
@@ -28,15 +30,7 @@ class Server:
         self.collection = self.client.get_collection(name=collection_name)
         logger.info(f"Connected to collection: {collection_name}")
 
-        self.model = SentenceTransformer(
-            "Qwen/Qwen3-Embedding-8B",
-            model_kwargs={
-                "attn_implementation": "flash_attention_2",
-                "device_map": "auto",
-                "torch_dtype": torch.bfloat16
-            },
-            tokenizer_kwargs={"padding_side": "left"},
-        )
+        self.model = self.pipeline_processor.embedding_generator.model
     
     async def search_video_chunks(self, query: str, websocket=None) -> List[Dict]:
         try:
@@ -169,6 +163,67 @@ class Server:
             
         except Exception as e:
             error_msg = f"Error processing video search: {e}"
+            logger.error(error_msg)
+            await websocket.send(json.dumps({
+                "event": "error",
+                "data": error_msg
+            }))
+
+    async def handle_video_upload(self, websocket, message_data):
+        try:
+            video_data = message_data.get("video_data")
+            video_id = str(uuid.uuid4())
+            
+            if not video_data:
+                await websocket.send(json.dumps({
+                    "event": "error",
+                    "data": "No video data provided"
+                }))
+                return
+            
+            logger.info(f"Processing video upload: {video_id}.mp4")
+            
+            try:
+                video_bytes = base64.b64decode(video_data)
+            except Exception as e:
+                await websocket.send(json.dumps({
+                    "event": "error",
+                    "data": f"Invalid video data encoding: {e}"
+                }))
+                return
+            
+            async def progress_callback(message):
+                await websocket.send(json.dumps({
+                    "event": "upload_progress",
+                    "data": message
+                }))
+            
+            result = await self.pipeline_processor.process_uploaded_video(
+                video_bytes, video_id, progress_callback
+            )
+            
+            if result.get('success'):
+                await websocket.send(json.dumps({
+                    "event": "upload_completed",
+                    "data": {
+                        "video_id": result.get('video_id'),
+                        "filename": result.get('filename'),
+                        "message": result.get('message')
+                    }
+                }))
+                logger.info(f"Video upload and processing completed: {result.get('video_id')}")
+            else:
+                await websocket.send(json.dumps({
+                    "event": "upload_failed",
+                    "data": {
+                        "error": result.get('error', 'Unknown error'),
+                        "filename": result.get('filename')
+                    }
+                }))
+                logger.error(f"Video upload failed: {result.get('error')}")
+                
+        except Exception as e:
+            error_msg = f"Error handling video upload: {e}"
             logger.error(error_msg)
             await websocket.send(json.dumps({
                 "event": "error",

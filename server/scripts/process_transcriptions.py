@@ -52,6 +52,7 @@ def save_timestamps_json(segments, output_path, video_name):
         json.dump(json_data, f, indent=2, ensure_ascii=False)
     
     logger.info(f"Saved timestamps: {json_file}")
+    return json_file
 
 def process_videos():
     

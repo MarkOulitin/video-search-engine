@@ -14,11 +14,11 @@ server = Server()
 async def websocket_handler(websocket):
     try:
         async for message in websocket:
-            logger.info(f"Received message: {message}")
             
             try:
                 data = json.loads(message)
                 action = data.get("action", "search")
+                logger.info(f"Received message with action: {action}")
                 
                 if action == "search":
                     if "query" in data:
@@ -29,6 +29,9 @@ async def websocket_handler(websocket):
                             "data": "Missing 'query' in request"
                         }
                         await websocket.send(json.dumps(error_response))
+                        
+                elif action == "upload":
+                    await server.handle_video_upload(websocket, data)
                         
                 elif action == "health":
                     # Health check

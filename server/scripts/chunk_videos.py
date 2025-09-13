@@ -4,13 +4,23 @@ from pathlib import Path
 from logger import logger
 
 class VideoChunker:
-    def __init__(self):
+    def __init__(self, video_id=None, video_path=None, video_caption=None):
         self.chunk_duration = 30.0  # 30 seconds per chunk
         self.min_last_chunk = 15.0  # Minimum duration for last chunk (merge if shorter)
         
         self.video_ids = []
         self.video_durations = {}
         self.video_captions = {}
+        if video_id and video_path and video_caption:
+            self.video_captions = {
+                video_id: {
+                    'video_file': video_id,
+                    'video_path': str(video_path),
+                    'caption': video_caption
+                }
+            }
+        else:
+            self.video_captions = {}
         
         self.base_path = Path(".")
         self.asr_path = self.base_path / "data" / "asr_timestamps"
@@ -152,17 +162,9 @@ class VideoChunker:
                 'video_id': video_id,
                 'duration': duration,
                 'video_caption': video_caption_data.get('caption', ''),
-                'caption_status': video_caption_data.get('status', 'unknown'),
                 'total_chunks': len(chunks),
                 'chunk_duration': self.chunk_duration,
                 'chunks': chunks,
-                'metadata': {
-                    'original_asr_segments': len(asr_data.get('segments', [])) if asr_data else 0,
-                    'original_key_frames': len(key_frame_data.get('key_frame_captions', [])) if key_frame_data else 0,
-                    'has_asr_data': asr_data is not None,
-                    'has_key_frame_data': key_frame_data is not None,
-                    'has_video_caption': bool(video_caption_data.get('caption', '').strip())
-                }
             }
             
             # Save to file

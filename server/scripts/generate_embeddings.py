@@ -1,9 +1,8 @@
 import json
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict
 from sentence_transformers import SentenceTransformer
-from datetime import datetime
 import torch
 from logger import logger
 
