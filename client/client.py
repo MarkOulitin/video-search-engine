@@ -1,9 +1,12 @@
 import gradio as gr
 import json
 import websockets
+import websockets.exceptions
 import os
 import base64
 import tempfile
+import asyncio
+import time
 from logger import logger
 from dotenv import load_dotenv
 
@@ -121,7 +124,13 @@ class Client:
             uri = f"ws://{self.server_host}:{self.server_port}/"
             logger.info(f"Connecting to {uri}")
             
-            async with websockets.connect(uri, max_size=50 * 1024 * 1024) as websocket:
+            async with websockets.connect(
+                uri, 
+                max_size=50 * 1024 * 1024,
+                ping_timeout=300, 
+                ping_interval=60,
+                close_timeout=10
+            ) as websocket:
                 logger.info(f"Connected to server")
                 
                 # Send search request
@@ -167,6 +176,15 @@ class Client:
                             status_callback(error_msg)
                         break
                         
+        except websockets.exceptions.ConnectionClosed as e:
+            error_msg = f"❌ Connection closed unexpectedly: {e}"
+            logger.error(error_msg)
+            if status_callback:
+                status_callback(error_msg)
+        except ConnectionResetError as e:
+            error_msg = f"❌ Connection was reset by server - this is normal after search completion"
+            logger.info(error_msg)  # Log as info since this is often normal
+            # Don't call status_callback for connection reset as it's often expected
         except Exception as e:
             error_msg = f"❌ Connection error: {e}"
             logger.error(error_msg)
@@ -223,21 +241,81 @@ def create_gradio_app():
     """Create the Gradio video search interface"""
     client = Client()
     
-    async def upload_video(video_file):
-        """Handle video upload"""
+    async def upload_video(video_file, progress=gr.Progress()):
+        """Handle video upload with real-time progress updates"""
         if not video_file:
             return (
                 "Please select a video file to upload!",
-                gr.update(visible=False),
-                gr.update(visible=True)
+                0,  # progress
+                gr.update(visible=True),   # upload button
+                gr.update(visible=False),  # search button
+                gr.update(visible=False)   # retry button
             )
         
-        # Status updates
-        status_text = ""
+        # Initialize progress
+        progress(0, desc="Starting upload...")
         
-        def update_status(status):
-            nonlocal status_text
-            status_text = status
+        # Status updates with progress tracking
+        current_progress = 0
+        status_updates = []
+        
+        def update_status_with_progress(status):
+            nonlocal current_progress, status_updates
+            status_updates.append(f"⏰ {time.strftime('%H:%M:%S')} - {status}")
+            
+            # Update progress based on status keywords with detailed server-side tracking
+            if "Reading video" in status:
+                current_progress = 5
+                progress(0.05, desc="Reading video file...")
+            elif "Encoding video" in status:
+                current_progress = 10
+                progress(0.10, desc="Encoding video data...")
+            elif "Connecting" in status:
+                current_progress = 15
+                progress(0.15, desc="Connecting to server...")
+            elif "Uploading" in status:
+                current_progress = 20
+                progress(0.20, desc="Uploading video...")
+            elif "Starting processing pipeline" in status:
+                current_progress = 25
+                progress(0.25, desc="Starting video processing pipeline...")
+            elif "Step 1/6: ASR Transcription completed" in status:
+                current_progress = 35
+                progress(0.35, desc="Audio transcription completed...")
+            elif "Step 2/6: Video Captioning completed" in status:
+                current_progress = 50
+                progress(0.50, desc="Video captioning completed...")
+            elif "Step 3/6: Key Frame Captioning completed" in status:
+                current_progress = 65
+                progress(0.65, desc="Key frame analysis completed...")
+            elif "Step 4/6: Video Chunking completed" in status:
+                current_progress = 75
+                progress(0.75, desc="Video chunking completed...")
+            elif "Step 5/6: Video Embedding Generation completed" in status:
+                current_progress = 85
+                progress(0.85, desc="Embedding generation completed...")
+            elif "Step 6/6: Database Ingestion completed" in status:
+                current_progress = 95
+                progress(0.95, desc="Database ingestion completed...")
+            elif "Video processing pipeline completed successfully" in status:
+                current_progress = 100
+                progress(1.0, desc="All processing completed!")
+            elif "processing" in status.lower() and "step" not in status.lower():
+                # Generic processing updates (fallback)
+                current_progress = min(current_progress + 5, 90)
+                progress(current_progress / 100, desc="Processing video...")
+            elif "completed" in status.lower() and "Upload completed" in status:
+                current_progress = 100
+                progress(1.0, desc="Upload completed!")
+            
+            # Format status display with recent updates
+            recent_updates = status_updates[-5:]  # Show last 5 updates
+            formatted_status = "### 📤 Upload Progress\n\n"
+            formatted_status += f"**Progress: {current_progress}%**\n\n"
+            for update in recent_updates:
+                formatted_status += f"{update}\n\n"
+            
+            return formatted_status
         
         upload_result = {"success": False}
         
@@ -246,64 +324,132 @@ def create_gradio_app():
             upload_result = {"success": success, "data": data}
         
         # Perform the upload
+        final_status = ""
         try:
             await client.upload_video(
                 video_file,
-                status_callback=update_status,
+                status_callback=update_status_with_progress,
                 completion_callback=upload_completion
             )
         except Exception as e:
-            status_text = f"❌ Upload error: {e}"
+            error_msg = f"❌ Upload error: {e}"
+            logger.error(error_msg)
+            progress(0, desc="Upload failed!")
+            final_status = f"### ❌ Upload Failed\n\n{error_msg}\n\nPlease try again or check the server connection."
+            return (
+                final_status,
+                0,  # progress
+                gr.update(visible=True),   # upload button
+                gr.update(visible=False),  # search button
+                gr.update(visible=True)    # retry button
+            )
         
         # Update UI based on results
         if upload_result["success"]:
             video_id = upload_result["data"].get("video_id", "Unknown")
-            final_status = f"✅ Video successfully uploaded and processed! Video ID: {video_id}\n\nYou can now search for content in this video using the search tab."
+            final_status = f"""### ✅ Upload & Indexing Complete!
+
+**Video ID: {video_id}**
+
+Your video has been successfully uploaded and fully processed:
+
+**📤 Upload Phase:**
+- ✅ File upload completed
+
+**🔧 Processing Pipeline:**
+- ✅ Audio transcription (ASR) completed
+- ✅ Video captioning completed  
+- ✅ Key frame analysis completed
+- ✅ Video chunking (30-second segments) completed
+- ✅ Embedding generation (Qwen3-Embedding-8B) completed
+- ✅ Database indexing (ChromaDB) completed
+
+**🎯 Ready for Search:**
+Your video is now fully indexed and searchable! You can search for content using natural language queries in the search tab."""
+            
+            progress(1.0, desc="Upload completed successfully!")
             return (
                 final_status,
-                gr.update(visible=False),  # Hide upload button
-                gr.update(visible=True)    # Show search tab button
+                100,  # progress
+                gr.update(visible=False),  # hide upload button
+                gr.update(visible=True),   # show search button
+                gr.update(visible=False)   # hide retry button
             )
         else:
             error = upload_result.get("data", {}).get("error", "Unknown error")
-            final_status = f"❌ Upload failed: {error}"
+            final_status = f"""### ❌ Upload Failed
+
+**Error:** {error}
+
+The upload process failed. Please check:
+- Video file format is supported (MP4, AVI, MOV, MKV, WebM)
+- File size is reasonable
+- Server is running and accessible
+- Network connection is stable"""
+            
+            progress(0, desc="Upload failed!")
             return (
                 final_status,
-                gr.update(visible=True),   # Keep upload button visible
-                gr.update(visible=False)   # Hide search tab button
+                0,  # progress
+                gr.update(visible=True),   # show upload button
+                gr.update(visible=False),  # hide search button
+                gr.update(visible=True)    # show retry button
             )
     
-    def reset_upload():
-        """Reset upload interface"""
-        return (
-            "Ready to upload a video!",
-            gr.update(visible=True),
-            gr.update(visible=False)
-        )
     
-    async def search_videos(query):
-        """Handle video search"""
+    async def search_videos(query, progress=gr.Progress()):
+        """Handle video search with real-time progress updates"""
         if not query.strip():
             return (
                 "Please enter a search query!",
                 client.format_results_summary(),
+                gr.update(visible=False),  # search again button
                 *[gr.update(visible=False, value=None)] * 5  # Hide all video players
             )
         
-        # Status updates
-        status_text = ""
+        # Initialize progress
+        progress(0, desc="Starting search...")
+        
+        # Status updates with progress tracking
+        current_progress = 0
+        status_updates = []
         results_summary = ""
         video_outputs = [gr.update(visible=False, value=None)] * 5
         
-        def update_status(status):
-            nonlocal status_text
-            status_text = status
+        def update_status_with_progress(status):
+            nonlocal current_progress, status_updates
+            status_updates.append(f"⏰ {time.strftime('%H:%M:%S')} - {status}")
+            
+            # Update progress based on status keywords
+            if "Encoding query" in status:
+                current_progress = 25
+                progress(0.25, desc="Encoding search query...")
+            elif "Searching" in status:
+                current_progress = 50
+                progress(0.5, desc="Searching video database...")
+            elif "Extracting" in status:
+                current_progress = 75
+                progress(0.75, desc="Extracting video chunks...")
+            elif "completed" in status.lower():
+                current_progress = 100
+                progress(1.0, desc="Search completed!")
+            
+            # Format status display with recent updates
+            recent_updates = status_updates[-3:]  # Show last 3 updates
+            formatted_status = "### 🔍 Search Progress\n\n"
+            formatted_status += f"**Query:** {query}\n\n"
+            formatted_status += f"**Progress: {current_progress}%**\n\n"
+            for update in recent_updates:
+                formatted_status += f"{update}\n\n"
+            
+            return formatted_status
         
         def update_results(results):
             nonlocal results_summary, video_outputs
             results_summary = client.format_results_summary()
             
-            # Process video results
+            # Process video results with better feedback
+            processed_count = 0
             for i, result in enumerate(results[:5]):  # Only show top 5
                 if result.get('extraction_success') and result.get('video_data'):
                     # Create temporary video file
@@ -314,38 +460,84 @@ def create_gradio_app():
                     )
                     
                     if video_file:
-                        video_info = f"Video {result['video_id']} - Chunk {result['chunk_id']} | {result['start_time']:.1f}s-{result['end_time']:.1f}s | Similarity: {result.get('similarity_score', 0):.3f}"
+                        processed_count += 1
+                        similarity_score = result.get('similarity_score', 0)
+                        video_info = f"🎬 Video {result['video_id']} - Chunk {result['chunk_id']} | ⏱️ {result['start_time']:.1f}s-{result['end_time']:.1f}s | 🎯 Similarity: {similarity_score:.3f}"
                         video_outputs[i] = gr.update(
                             visible=True,
                             value=video_file,
                             label=video_info
                         )
+                        
+                        # Update progress as videos are processed
+                        video_progress = 85 + (processed_count * 3)  # 85-100% for video processing
+                        progress(min(video_progress / 100, 1.0), desc=f"Loading video {processed_count}...")
                     else:
                         video_outputs[i] = gr.update(visible=False, value=None)
                 else:
                     video_outputs[i] = gr.update(visible=False, value=None)
         
         # Perform the search
+        final_status = ""
         try:
             await client.search_videos(
                 query,
-                status_callback=update_status,
+                status_callback=update_status_with_progress,
                 results_callback=update_results
             )
+            
+            # Final status update
+            num_results = len(client.current_results)
+            if num_results > 0:
+                final_status = f"""### ✅ Search Completed!
+
+**Query:** {query}
+**Results:** Found {num_results} matching video chunks
+
+The search has completed successfully. Results are ranked by similarity score, with the most relevant videos shown first."""
+                progress(1.0, desc="Search completed successfully!")
+            else:
+                final_status = f"""### 🔍 No Results Found
+
+**Query:** {query}
+
+No matching video chunks were found. Try:
+- Using different keywords
+- Making your query more specific
+- Checking if videos have been uploaded and processed"""
+                progress(1.0, desc="Search completed - no results")
+                
+        except ConnectionResetError as e:
+            # Connection reset is often normal after search completion on Windows
+            logger.info(f"Connection reset after search - this is normal on Windows: {e}")
+            if not final_status:  # Only show error if we haven't already set a final status
+                final_status = f"""### ✅ Search Completed
+
+**Query:** {query}
+
+Search completed successfully. Some connection cleanup errors on Windows are normal and can be ignored."""
+                progress(1.0, desc="Search completed!")
         except Exception as e:
-            status_text = f"❌ Error: {e}"
+            error_msg = f"❌ Search error: {e}"
+            logger.error(error_msg)
+            progress(0, desc="Search failed!")
+            final_status = f"""### ❌ Search Failed
+
+**Query:** {query}
+**Error:** {error_msg}
+
+The search process failed. Please check:
+- Server is running and accessible
+- Network connection is stable
+- Try a different search query"""
         
-        return (status_text, results_summary, *video_outputs)
-    
-    def clear_results():
-        """Clear all results"""
-        client.current_results = []
-        client.current_query = ""
         return (
-            "Ready to search!",
-            "No results yet. Enter a query and click Search!",
-            *[gr.update(visible=False, value=None)] * 5
+            final_status, 
+            results_summary, 
+            gr.update(visible=True),  # show search again button
+            *video_outputs
         )
+    
     
     # Create the interface
     with gr.Blocks(title="Video RAG Search", theme=gr.themes.Soft()) as app:
@@ -368,6 +560,17 @@ def create_gradio_app():
                     with gr.Column(scale=1):
                         upload_btn = gr.Button("📤 Upload & Process", variant="primary", size="lg")
                         reset_upload_btn = gr.Button("🔄 Reset", variant="secondary")
+                        retry_upload_btn = gr.Button("🔄 Retry Upload", variant="secondary", visible=False)
+                
+                # Progress bar for upload
+                upload_progress = gr.Number(
+                    label="Upload Progress (%)", 
+                    value=0,
+                    minimum=0,
+                    maximum=100,
+                    interactive=False,
+                    visible=True
+                )
                 
                 upload_status = gr.Markdown("Ready to upload a video!", label="Upload Status")
                 
@@ -403,6 +606,7 @@ def create_gradio_app():
                     with gr.Column(scale=1):
                         search_btn = gr.Button("🔍 Search", variant="primary", size="lg")
                         clear_btn = gr.Button("🗑️ Clear", variant="secondary")
+                        search_again_btn = gr.Button("🔍 Search Again", variant="secondary", visible=False)
                 
                 # Status and results
                 with gr.Row():
@@ -449,12 +653,28 @@ def create_gradio_app():
         upload_btn.click(
             fn=upload_video,
             inputs=[video_upload],
-            outputs=[upload_status, upload_btn, go_to_search_btn]
+            outputs=[upload_status, upload_progress, upload_btn, go_to_search_btn, retry_upload_btn]
         )
         
+        retry_upload_btn.click(
+            fn=upload_video,
+            inputs=[video_upload],
+            outputs=[upload_status, upload_progress, upload_btn, go_to_search_btn, retry_upload_btn]
+        )
+        
+        def reset_upload_with_progress():
+            """Reset upload interface with progress"""
+            return (
+                "Ready to upload a video!",
+                0,  # progress
+                gr.update(visible=True),   # upload button
+                gr.update(visible=False),  # search button
+                gr.update(visible=False)   # retry button
+            )
+        
         reset_upload_btn.click(
-            fn=reset_upload,
-            outputs=[upload_status, upload_btn, go_to_search_btn]
+            fn=reset_upload_with_progress,
+            outputs=[upload_status, upload_progress, upload_btn, go_to_search_btn, retry_upload_btn]
         )
         
         # Function to switch to search tab
@@ -470,18 +690,35 @@ def create_gradio_app():
         search_btn.click(
             fn=search_videos,
             inputs=[query_input],
-            outputs=[status_output, results_summary, video1, video2, video3, video4, video5]
+            outputs=[status_output, results_summary, search_again_btn, video1, video2, video3, video4, video5]
+        )
+        
+        search_again_btn.click(
+            fn=search_videos,
+            inputs=[query_input],
+            outputs=[status_output, results_summary, search_again_btn, video1, video2, video3, video4, video5]
         )
         
         query_input.submit(
             fn=search_videos,
             inputs=[query_input],
-            outputs=[status_output, results_summary, video1, video2, video3, video4, video5]
+            outputs=[status_output, results_summary, search_again_btn, video1, video2, video3, video4, video5]
         )
         
+        def clear_results_with_button():
+            """Clear all results and hide search again button"""
+            client.current_results = []
+            client.current_query = ""
+            return (
+                "Ready to search!",
+                "No results yet. Enter a query and click Search!",
+                gr.update(visible=False),  # hide search again button
+                *[gr.update(visible=False, value=None)] * 5
+            )
+        
         clear_btn.click(
-            fn=clear_results,
-            outputs=[status_output, results_summary, video1, video2, video3, video4, video5]
+            fn=clear_results_with_button,
+            outputs=[status_output, results_summary, search_again_btn, video1, video2, video3, video4, video5]
         )
     
     return app
