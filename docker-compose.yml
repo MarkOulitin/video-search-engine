@@ -12,29 +12,29 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
     restart: unless-stopped
-    # networks:
-    #   - rag-network
-  # server:
-  #   image: rag-server:latest
-  #   container_name: server
-  #   env_file:
-  #     - .env
-  #   depends_on:
-  #     - chromadb
-  #   ports:
-  #     - "${SERVER_PORT}:${SERVER_PORT}"
-  #   volumes:
-  #     - ./logs/server:/home/logs
-  #     - ./data:/home/data
-  #   networks:
-  #     - rag-network
-  #   deploy:
-  #     resources:
-  #       reservations:
-  #         devices:
-  #           - driver: nvidia
-  #             count: all
-  #             capabilities: [gpu]
+    networks:
+      - rag-network
+  server:
+    image: rag-server:latest
+    container_name: server
+    env_file:
+      - .env
+    depends_on:
+      - chromadb
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    volumes:
+      - ./logs/server:/app/logs
+      - ./data:/app/data
+    networks:
+      - rag-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 volumes:
   chroma_data:
     driver: local
