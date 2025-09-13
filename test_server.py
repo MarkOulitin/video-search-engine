@@ -41,7 +41,12 @@ async def test_video_search():
     try:
         print(f"🔗 Connecting to {uri}...")
         
-        async with websockets.connect(uri, ping_timeout=30, ping_interval=30) as websocket:
+        async with websockets.connect(
+            uri, 
+            ping_timeout=30, 
+            ping_interval=30,
+            max_size=50 * 1024 * 1024  # 50MB message size limit
+        ) as websocket:
             print("✅ Connected successfully!")
             
             # Send search request
@@ -146,7 +151,12 @@ async def test_health_check():
     
     try:
         print("\n🏥 Testing health check...")
-        async with websockets.connect(uri, ping_timeout=10, ping_interval=10) as websocket:
+        async with websockets.connect(
+            uri, 
+            ping_timeout=10, 
+            ping_interval=10,
+            max_size=50 * 1024 * 1024  # 50MB message size limit
+        ) as websocket:
             
             # Send health check
             health_message = {"action": "health"}

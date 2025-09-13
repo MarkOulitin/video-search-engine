@@ -376,22 +376,16 @@ def create_gradio_app():
                 
                 gr.Markdown("""
                 ### 📋 Upload Process:
-                1. **Select a video file** (supported formats: MP4, AVI, MOV, MKV, WebM)
+                1. **Select a video file** (supported formats: MP4)
                 2. **Click Upload & Process** to start the pipeline
                 3. **Wait for processing** - this may take several minutes depending on video length
                 4. **Processing includes:**
                    - Audio transcription with timestamps
-                   - Video captioning with VideoLLaMA
-                   - Key frame captioning with FastVLM
+                   - Video captioning
+                   - Key frame captioning
                    - Video chunking (30-second segments)
                    - Embedding generation with Qwen3-Embedding-8B
                    - Database ingestion into ChromaDB
-                
-                ### ⚠️ Important Notes:
-                - Processing can take 5-15 minutes depending on video length
-                - Do not close the browser during processing
-                - Videos are saved to the server's data directory
-                - Once processed, you can search for content in the Search tab
                 """)
             
             # Search Tab
@@ -449,12 +443,6 @@ def create_gradio_app():
                 2. **Click Search** or press Enter to find similar video chunks
                 3. **View the results** - up to 5 video chunks will be displayed
                 4. Each result shows the video segment with similarity score and time range
-                
-                ### 🔧 Search Features:
-                - **Semantic Search**: Uses Qwen3-Embedding-8B for understanding natural language queries
-                - **Video Extraction**: Automatically extracts relevant video segments
-                - **Similarity Scoring**: Shows how well each result matches your query
-                - **Real-time Status**: Live updates during the search process
                 """)
         
         # Upload Event handlers
